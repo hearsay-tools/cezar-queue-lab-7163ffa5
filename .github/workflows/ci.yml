@@ -1,0 +1,143 @@
+name: CI
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
+    branches: [main]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: lab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  proof:
+    name: Lab exact-SHA proof probe
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions: {contents: read, actions: read}
+    outputs:
+      verified: ${{ steps.proof.outputs.verified }}
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - id: proof
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          retries: 0
+          script: |
+            await require('./lab/probe.cjs').execute({ github, context, core, mode: 'proof' });
+      - &artifact
+        name: Retain bounded redacted lab evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: lab-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/lab-evidence/*.json
+          if-no-files-found: warn
+          retention-days: 14
+  verify:
+    name: Unit, build, E2E, and package
+    if: github.event_name == 'pull_request_target' || github.event_name == 'merge_group'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions: {contents: read, actions: read, pull-requests: read}
+    steps:
+      - *checkout
+      - name: Real inert-fixture guard only; no production suites
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          retries: 0
+          script: |
+            await require('./lab/probe.cjs').execute({ github, context, core, mode: 'guard' });
+      - *artifact
+  admission:
+    name: Validate reviewed queue entry
+    needs: verify
+    if: github.event_name == 'merge_group' && needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions: {contents: read, actions: read, pull-requests: read}
+    steps:
+      - *checkout
+      - name: Unchanged helper over official metadata; native review is simulated
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          retries: 0
+          script: |
+            await require('./lab/probe.cjs').execute({ github, context, core, mode: 'admission' });
+      - *artifact
+  review:
+    name: Automated Code Review
+    needs: [verify, admission]
+    if: always() && (github.event_name == 'pull_request_target' || github.event_name == 'merge_group')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions: {contents: read, actions: read, pull-requests: read}
+    steps:
+      - name: SIMULATED REVIEW, NOT MODEL REVIEW
+        env:
+          EVENT: ${{ github.event_name }}
+          VERIFY: ${{ needs.verify.result }}
+          ADMISSION: ${{ needs.admission.result }}
+          CANCELLED: ${{ job.status == 'cancelled' }}
+        run: |
+          echo 'SIMULATED REVIEW, NOT MODEL REVIEW'
+          echo 'SIMULATED REVIEW, NOT MODEL REVIEW' >> "$GITHUB_STEP_SUMMARY"
+          test "$CANCELLED" = false
+          test "$VERIFY" = success
+          if [ "$EVENT" = merge_group ]; then test "$ADMISSION" = success; fi
+      - if: github.event_name == 'pull_request_target'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: SIMULATED REVIEW, NOT MODEL REVIEW — validate inert fixture change
+        if: github.event_name == 'pull_request_target'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          retries: 0
+          script: |
+            await require('./lab/probe.cjs').execute({ github, context, core, mode: 'simulate' });
+      - *artifact
+  fallback:
+    name: Lab fallback work
+    needs: proof
+    if: always() && github.event_name == 'push' && (needs.proof.result != 'success' || needs.proof.outputs.verified != 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Record actual fallback execution; no production heavy work
+        run: |
+          echo 'LAB_FALLBACK_EXECUTED'
+          echo 'LAB_FALLBACK_EXECUTED: sentinel only, no production tests.' >> "$GITHUB_STEP_SUMMARY"
+  push-result:
+    name: Lab push result
+    needs: [proof, fallback]
+    if: always() && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Require fallback; this small lab cannot supply the production roster
+        env:
+          PROOF_RESULT: ${{ needs.proof.result }}
+          VERIFIED: ${{ needs.proof.outputs.verified }}
+          FALLBACK: ${{ needs.fallback.result }}
+          CANCELLED: ${{ job.status == 'cancelled' }}
+        run: |
+          test "$CANCELLED" = false
+          test "$VERIFIED" != true
+          test "$FALLBACK" = success
+          echo 'SIMULATED REVIEW, NOT MODEL REVIEW' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Full lab fallback observed. Positive production reuse remains unproved.' >> "$GITHUB_STEP_SUMMARY"

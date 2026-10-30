@@ -1,0 +1,10 @@
+{
+  "source_repository": "hearsay-tools/cezarion",
+  "source_commit": "e49be8dc4dfdc43795986f651bd29a261f243df5",
+  "helper_sha256": {
+    ".github/scripts/merge-queue-admission.cjs": "0be406436e2bd61882b8c73a4cafd1c606478f07b3b856b7964465e79c1ac894",
+    ".github/scripts/queue-ci-proof.cjs": "9c93fd8952c7eb83784283ffd2cd6dfffa960633b8442b14ff91b6d1bf0e5761",
+    ".github/scripts/automated-review.cjs": "5ac04bfaa0192919b53817ef187027412bd324cdb59c6f093875281b4190c4af"
+  },
+  "review": "SIMULATED REVIEW, NOT MODEL REVIEW"
+}
